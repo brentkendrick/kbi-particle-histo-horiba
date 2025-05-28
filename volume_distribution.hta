@@ -1,0 +1,240 @@
+<html>
+  <head>
+    <title>Particle Volume Distribution Analyzer</title>
+    <HTA:APPLICATION ID="ParticleApp" BORDER="thick" CAPTION="yes" SINGLEINSTANCE="yes" SCROLL="no" SYSMENU="yes" />
+    <script language="VBScript">
+      Option Explicit
+
+      Sub RunAnalysis()
+        Dim fso, FilePath, HSCircLowerBound, HSCircUpperBound
+        Set fso = CreateObject("Scripting.FileSystemObject")
+
+        ' --- get and clean file path ---
+        FilePath = document.getElementById("filepath").value
+        If Left(FilePath,1) = """" Then FilePath = Mid(FilePath,2)
+        If Right(FilePath,1) = """" Then FilePath = Left(FilePath, Len(FilePath)-1)
+
+        ' --- HS circularity bounds (defaults) ---
+        HSCircLowerBound = 0       ' default lower bound
+        HSCircUpperBound = 1       ' default upper bound
+        ' To enable user input, uncomment below:
+        'On Error Resume Next
+        'HSCircLowerBound = CDbl(document.getElementById("lowerbound").value)
+        'HSCircUpperBound = CDbl(document.getElementById("upperbound").value)
+        'On Error GoTo 0
+
+        If Not fso.FileExists(FilePath) Then
+          MsgBox "Data file not found:" & vbCrLf & FilePath, vbExclamation
+          Exit Sub
+        End If
+
+        ' --- read raw data and compute vectors ---
+        Dim rawF, header, fields, i
+        Set rawF = fso.OpenTextFile(FilePath, 1)
+        header = rawF.ReadLine
+        fields = Split(header, vbTab)
+
+        Dim idxIndex, idxDiameter, idxCircularity
+        For i = 0 To UBound(fields)
+          Select Case fields(i)
+            Case "Index": idxIndex = i
+            Case "Diameter": idxDiameter = i
+            Case "Circularity": idxCircularity = i
+          End Select
+        Next
+
+        Dim IndexV(), DiamV(), CircV(), SEVolV(), HSCircV()
+        Dim cnt: cnt = 0
+        Dim parts
+        Do Until rawF.AtEndOfStream
+          parts = Split(rawF.ReadLine, vbTab)
+          If IsArray(parts) Then
+            If UBound(parts) >= idxCircularity Then
+              Dim lab
+              lab = parts(idxIndex)
+              If lab <> "Mean" And lab <> "StDev" And lab <> "Median" Then
+                ReDim Preserve IndexV(cnt)
+                ReDim Preserve DiamV(cnt)
+                ReDim Preserve CircV(cnt)
+                ReDim Preserve SEVolV(cnt)
+                ReDim Preserve HSCircV(cnt)
+
+                IndexV(cnt) = CDbl(parts(idxIndex))
+                DiamV(cnt) = CDbl(parts(idxDiameter))
+                CircV(cnt) = CDbl(parts(idxCircularity))
+                SEVolV(cnt) = (1/6) * 3.141592653589793 * (DiamV(cnt)^3)
+                HSCircV(cnt) = Round(CircV(cnt)^2, 2)
+                cnt = cnt + 1
+              End If
+            End If
+          End If
+        Loop
+        rawF.Close
+
+        ' --- filter by HS circularity ---
+        Dim fIdx(), fDiam(), fSEVol(), fHSCirc(), nFilt
+        nFilt = 0
+        For i = 0 To UBound(HSCircV)
+          If HSCircV(i) >= HSCircLowerBound And HSCircV(i) <= HSCircUpperBound Then
+            ReDim Preserve fIdx(nFilt)
+            ReDim Preserve fDiam(nFilt)
+            ReDim Preserve fSEVol(nFilt)
+            ReDim Preserve fHSCirc(nFilt)
+            fIdx(nFilt) = IndexV(i)
+            fDiam(nFilt) = DiamV(i)
+            fSEVol(nFilt) = SEVolV(i)
+            fHSCirc(nFilt) = HSCircV(i)
+            nFilt = nFilt + 1
+          End If
+        Next
+
+        ' --- build 1001-bin log histogram ---
+        Const bins = 1001
+        Dim hx(), hy()
+        ReDim hx(bins-1)
+        ReDim hy(bins-1)
+        For i = 0 To bins-1
+          hx(i) = 10 ^ (-1 + 0.004301 * i)
+          hy(i) = 0
+        Next
+
+        ' --- fill histogram ---
+        Dim dval, j
+        For j = 0 To UBound(fDiam)
+          dval = fDiam(j)
+          For i = 1 To bins-1
+            If dval > hx(i-1) And dval <= hx(i) Then
+              hy(i) = hy(i) + 1
+              Exit For
+            End If
+          Next
+        Next
+
+        ' --- cumulative percent ---
+        Dim cumY(), cumPct()
+        ReDim cumY(bins-1)
+        ReDim cumPct(bins-1)
+        cumY(0) = hy(0)
+        For i = 1 To bins-1
+          cumY(i) = cumY(i-1) + hy(i)
+        Next
+        For i = 0 To bins-1
+          cumPct(i) = cumY(i) * 100 / cumY(bins-1)
+        Next
+
+        ' --- q-histogram and normalize ---
+        Dim qh(), qn(), totQ
+        ReDim qh(bins-1)
+        qh(0) = cumPct(0)
+        totQ = qh(0)
+        For i = 1 To bins-1
+          qh(i) = (cumPct(i) - cumPct(i-1)) / (Log(hx(i)/hx(i-1)))
+          totQ = totQ + qh(i)
+        Next
+        ReDim qn(bins-1)
+        For i = 0 To bins-1
+          qn(i) = qh(i) * 100 / totQ
+        Next
+
+        ' --- volume-weighted histogram ---
+        Dim vhist(), vnorm(), totV
+        ReDim vhist(bins-1)
+        totV = 0
+        For i = 0 To bins-1
+          vhist(i) = qn(i) * (hx(i)^3)
+          totV = totV + vhist(i)
+        Next
+        ReDim vnorm(bins-1)
+        For i = 0 To bins-1
+          vnorm(i) = vhist(i) * 100 / totV
+        Next
+
+        ' --- smooth (11-point MA) ---
+        Dim smooth(), sumTmp
+        ReDim smooth(bins-1)
+        For i = 0 To bins-1
+          If i < 5 Or i > bins-6 Then
+            smooth(i) = vnorm(i)
+          Else
+            sumTmp = 0
+            For j = i-5 To i+5
+              sumTmp = sumTmp + vnorm(j)
+            Next
+            smooth(i) = sumTmp / 11
+          End If
+        Next
+
+        ' --- write histogram file ---
+        Dim outHist
+        Set outHist = fso.CreateTextFile(Replace(FilePath, ".txt", "_Filtered_histogram.txt"), True, True)
+        For i = 0 To bins-1
+          outHist.WriteLine hx(i) & vbTab & smooth(i)
+        Next
+        outHist.Close
+
+        ' --- calculate D[4,3] & D[3,2] ---
+        Dim sumSE, sum43, sum32, D43, D32
+        sumSE = 0: sum43 = 0: sum32 = 0
+        For i = 0 To UBound(fSEVol)
+          sumSE = sumSE + fSEVol(i)
+          sum43 = sum43 + fSEVol(i) * fDiam(i)
+          sum32 = sum32 + fSEVol(i) / fDiam(i)
+        Next
+        D43 = sum43 / sumSE
+        D32 = sumSE / sum32
+
+        ' --- cumulative vol percent for interpolation ---
+        Dim cumV()
+        ReDim cumV(bins-1)
+        cumV(0) = smooth(0)
+        For i = 1 To bins-1
+          cumV(i) = cumV(i-1) + smooth(i)
+        Next
+
+        ' --- interpolate D[v,p] at 10%,50%,90%,99% ---
+        Dim thresholds(3), labels(3), DvList(3), boundsX(1), boundsY(1), Z
+        thresholds(0)=10: thresholds(1)=50: thresholds(2)=90: thresholds(3)=99
+        labels(0)="0.1": labels(1)="0.5": labels(2)="0.9": labels(3)="0.99"
+        For j = 0 To 3
+          For i = 0 To bins-2
+            If cumV(i) <= thresholds(j) And cumV(i+1) >= thresholds(j) Then
+              boundsX(0)=hx(i): boundsX(1)=hx(i+1)
+              boundsY(0)=cumV(i): boundsY(1)=cumV(i+1)
+              Exit For
+            End If
+          Next
+          Z = Log(boundsX(0))/Log(10) + ((Log(boundsX(1))/Log(10)-Log(boundsX(0))/Log(10)) * ((thresholds(j)-boundsY(0)) / (boundsY(1)-boundsY(0))))
+          DvList(j) = 10^Z
+        Next
+
+        ' --- write parameters file ---
+        Dim outPar
+        Set outPar = fso.CreateTextFile(Replace(FilePath, ".txt", "_CalculatedParameters.txt"), True, True)
+        outPar.WriteLine "D[4,3]" & vbTab & D43
+        outPar.WriteLine "D[3,2]" & vbTab & D32
+        For j = 0 To 3
+          outPar.WriteLine "D[v," & labels(j) & "]" & vbTab & DvList(j)
+        Next
+        outPar.Close
+
+        MsgBox "Analysis complete!" & vbCrLf & _
+               Replace(FilePath, ".txt", "_CalculatedParameters.txt") & vbCrLf & _
+               Replace(FilePath, ".txt", "_Filtered_histogram.txt"), vbInformation
+      End Sub
+    </script>
+  </head>
+  <body style="font-family: Segoe UI; padding: 20px; background: #f8f8f8">
+    <h2>Particle Volume Distribution Analyzer</h2>
+    <div>
+      <label for="filepath">Data File (.txt):</label><br />
+      <input id="filepath" type="text" size="60" value="TotalParticlestats1.txt" /><br /><br />
+      <!-- HS bounds inputs commented out:
+    <label for="lowerbound">HS Circularity Lower Bound:</label><br/>
+    <input id="lowerbound" type="text" value="0.00"/><br/><br/>
+    <label for="upperbound">HS Circularity Upper Bound:</label><br/>
+    <input id="upperbound" type="text" value="1.00"/><br/><br/>
+    -->
+      <button onclick="RunAnalysis()" style="font-size: 14pt; padding: 12px 24px">Generate</button>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,517 @@
+Const MB_OPEN_FILE = 1
+Const MB_INPUTBOX = 0
+
+Dim objfso, objFileName
+
+Set objfso = CreateObject("Scripting.FileSystemObject", "dbdr-picts")         'Create file object
+
+
+'Read the ParticleFinder Table from a .txt file----------------------------------------------------------
+
+'FilePath = LabSpec.MessageEx(".txt",1)                    'Input file name of ParticleFinder Table
+
+FilePath = LabSpec.MessageEx(".txt",MB_OPEN_FILE+MB_NONE)
+
+Set objFile = objfso.OpenTextFile(FilePath, 1)              'Open the PF table file For reading only
+
+objFileName = objfso.GetFileName(FilePath)
+
+
+'First obtain the data headers For Each column in the ParticleFinder Table: always assumed To be the first row------------------------------------------------
+
+Dim counter, Arrayrows, Arraycolumns, i
+
+counter = 0
+
+strLine = objFile.ReadLine
+arrFields = Split(strLine, Chr(9))                          'Reads first line and Splits by tab delimiter
+
+Arrayrows = UBound(arrFields)-1
+
+ReDim HeaderTable(Arrayrows+1)                                'Obtains the headers in the first line of the txt file
+
+For i = 0 To Arrayrows
+
+    HeaderTable(i) = arrFields(i)                           'Write the headers in the first line into HeaderTable
+
+Next
+
+counter = counter + 1
+
+
+'Then identify the indices For the columns corresponding To Index, Diameter, and Circularity
+
+Dim IndexIndex, DiameterIndex, CircularityIndex
+
+For i = 0 To Arrayrows
+
+    If HeaderTable(i) = "Index" Then
+        IndexIndex = i
+    ElseIf HeaderTable(i) = "Diameter" Then
+        DiameterIndex = i
+    ElseIf HeaderTable(i) = "Circularity" Then
+        CircularityIndex = i
+    Else
+    End If
+
+Next
+
+
+
+
+'Then read through the ParticleFinder Table, row by row. Read the corresponding Index, Diameter, and Circularity data Into their corresponding vectors.
+
+
+Do Until objFile.AtEndOfStream
+
+    strLine = objFile.ReadLine
+    arrFields = Split(strLine, Chr(9))
+
+    If arrFields(IndexIndex) = "Mean" Then
+    ElseIf arrFields(IndexIndex) = "StDev" Then
+    ElseIf arrFields(IndexIndex) = "Median" Then
+    Else
+        ReDim Preserve IndexVector(counter)
+
+        IndexVector(counter-1) = CDbl(arrFields(IndexIndex))
+
+        ReDim Preserve DiameterVector(counter)
+
+        DiameterVector(counter-1) = CDbl(arrFields(DiameterIndex))
+
+        ReDim Preserve CircularityVector(counter)
+
+        CircularityVector(counter-1) = CDbl(arrFields(CircularityIndex))
+
+        counter = counter + 1
+    End If
+
+Loop
+
+
+objFile.Close
+
+
+
+
+'Now, use the circularity vector To calculate the HS circularity vector---------------------------------------------
+
+For j = 0 To UBound(CircularityVector)-1
+
+    ReDim Preserve HSCircularityVector(j+1)
+    HSCircularityVector(j) = Round(CircularityVector(j) ^ 2, 2)
+
+Next
+
+
+
+'Now, use the diameter vector To calculate the SE equivalent volume vector-------------------------------------------
+
+Const Pi = 3.141592653589793238462643383279502884197
+
+For k = 0 To UBound(DiameterVector)-1
+
+    ReDim Preserve SEVolumeVector(k+1)
+    SEVolumeVector(k) = (1/6) * Pi * (DiameterVector(k) ^ 3)
+
+Next
+
+
+
+'Now we need To Filter the IndexVector, DiameterVector, CircularityVector, HSCircularityVector, and SEVolumeVector based On user-defined HSCircularity bounds
+
+Dim HSCircLowerBound
+Dim HSCircUpperBound
+
+' Show a message
+HSCircLowerBound = CDbl(LabSpec.MessageEx("Enter lower bound of HS Circularity filter to apply to data. HS Circularity should be greater than: ",MB_INPUTBOX+MB_NONE))
+
+' Show a message
+HSCircUpperBound = CDbl(LabSpec.MessageEx("Enter upper bound of HS Circularity filter to apply to data. HS Circularity should be less than: ",MB_INPUTBOX+MB_NONE))
+
+counter = 0
+
+
+For i = 0 To UBound(HSCircularityVector)-1
+
+    If HSCircularityVector(i) >= HSCircLowerBound And HSCircularityVector(i) <= HSCircUpperBound Then
+        
+        ReDim Preserve IndexVectorFil(counter+1)
+        IndexVectorFil(counter) = IndexVector(i)
+
+        ReDim Preserve DiameterVectorFil(counter+1)
+        DiameterVectorFil(counter) = CDbl(DiameterVector(i))
+
+        ReDim Preserve CircularityVectorFil(counter+1)
+        CircularityVectorFil(counter) = CircularityVector(i)
+
+        ReDim Preserve HSCircularityVectorFil(counter+1)
+        HSCircularityVectorFil(counter) = HSCircularityVector(i)
+
+        ReDim Preserve SEVolumeVectorFil(counter+1)
+        SEVolumeVectorFil(counter) = SEVolumeVector(i)
+
+        counter = counter + 1
+
+    End If
+
+Next
+
+
+
+
+'Next, Filter the diameters Into histogram bins For the Filtered data---------------------------------------------------------------------
+
+Dim histogramXaxis(1001) ', histogramXbins(1002)
+
+For j = 0 To 1000
+
+    histogramXaxis(j) = 10^(-1 + 0.004301 * j)
+
+Next
+
+
+'histogramXbins(0) = histogramXaxis(0) - 0.5*(histogramXaxis(1)-histogramXaxis(0))
+
+'For k = 1 To 1001
+
+'    histogramXbins(k) = histogramXaxis(k-1) + 0.5*(histogramXaxis(k)-histogramXaxis(k-1))
+
+'Next
+
+
+Dim histogramYDiameter(1001)
+
+For k = 0 To 1000
+
+    histogramYDiameter(k) = 0
+
+Next
+
+
+For i = 0 To UBound(DiameterVectorFil)-1
+
+    For j = 1 To UBound(histogramXaxis)-1
+        
+        If DiameterVectorFil(i) <= histogramXaxis(j-1) Or DiameterVectorFil(i) > histogramXaxis(j) Then
+        ElseIf DiameterVectorFil(i) > histogramXaxis(j-1) And DiameterVectorFil(i) <= histogramXaxis(j) Then
+            histogramYDiameter(j) = histogramYDiameter(j) + 1
+            Exit For
+        Else
+        End If
+
+    Next
+Next
+
+
+'Print out the Diameter histogram For the Filtered data-------------------------------------------------------------------
+
+'Dim fso, NewFileNamePath, NumHistogramstring
+'Set fso = CreateObject("Scripting.Filesystemobject")
+
+'NewFileNamePath = Replace(FilePath, ".txt", "_Filtered_numbersdiameterhistogram.txt")
+
+'Set f = fso.CreateTextFile(NewFileNamePath, True, True)
+
+
+'For i = 0 To 1000
+
+'    NumHistogramstring = NumHistogramstring & CStr(histogramXaxis(i)) & Chr(9) & CStr(histogramYDiameter(i)) & vbCrLf
+
+'Next
+
+'f.Write NumHistogramstring
+
+'f.Close
+
+
+'Now, convert this Into the cumulative plot and normalize
+
+Dim cumulativeYDiameter(1001)
+
+cumulativeYDiameter(0) = histogramYDiameter(0)
+
+For k = 1 To 1000
+
+    cumulativeYDiameter(k) = cumulativeYDiameter(k-1) + histogramYDiameter(k)
+
+Next
+
+
+Dim cumulativeYDiameterNorm(1001), TotalCounts
+
+TotalCounts = cumulativeYDiameter(1000)
+
+For j = 0 To 1000
+
+    cumulativeYDiameterNorm(j) = cumulativeYDiameter(j)*100/TotalCounts
+
+Next
+
+
+'Now calculate the q histogram and normalize
+
+Dim qhistogram(1001), Totalq, qhistogramNorm(1001)
+
+qhistogram(0) = cumulativeYDiameterNorm(0)
+Totalq = qhistogram(0)
+
+For k = 1 To 1000
+
+    qhistogram(k) = (cumulativeYDiameterNorm(k)-cumulativeYDiameterNorm(k-1)) / (Log(histogramXaxis(k)/histogramXaxis(k-1)))
+    Totalq = Totalq + qhistogram(k)
+
+Next
+
+For i = 0 To 1000
+
+    qhistogramNorm(i) = qhistogram(i) * 100 / Totalq
+
+Next
+
+
+'Then, transform q histogram Into volume basis
+
+Dim histogramYDiameterVol(1001), TotalCountsVolBasis
+
+TotalCountsVolBasis = 0
+
+For k = 0 To 1000
+
+    histogramYDiameterVol(k) = qhistogramNorm(k) * (histogramXaxis(k))^3
+    TotalCountsVolBasis = TotalCountsVolBasis + histogramYDiameterVol(k)
+
+Next
+
+
+'Now, normalize the histogram in the volume basis
+
+Dim histogramYDiameterVolNorm(1001), NormFactor
+
+NormFactor = 100 / TotalCountsVolBasis
+
+For i = 0 To 1000
+
+    histogramYDiameterVolNorm(i) = histogramYDiameterVol(i) * NormFactor
+
+Next
+        
+
+'Try smoothing the histogram using a moving average and a basis of 11
+
+Dim histogramYDiameterVolNormSmooth(1001)
+
+For h = 0 To 1000
+
+    histogramYDiameterVolNormSmooth(h) = 0
+
+Next
+
+For j = 0 To 1000
+
+    If j < 5 Or j > 995 Then
+        histogramYDiameterVolNormSmooth(j) = histogramYDiameterVolNorm(j)
+    Else
+        For k = -5 To 5
+            histogramYDiameterVolNormSmooth(j) = histogramYDiameterVolNormSmooth(j) + histogramYDiameterVolNorm(j + k)
+        Next
+    
+        histogramYDiameterVolNormSmooth(j)= histogramYDiameterVolNormSmooth(j) / 11
+
+    End If
+
+Next
+
+
+
+
+
+
+
+
+'Finally, print out the Volume-weighted CE diameters For the Filtered data-------------------------------------------------------------------
+
+Dim fso, NewFileNamePath, Histogramstring
+Set fso = CreateObject("Scripting.Filesystemobject")
+
+NewFileNamePath = Replace(FilePath, ".txt", "_Filtered_histogram.txt")
+
+Set f = fso.CreateTextFile(NewFileNamePath, True, True)
+
+
+For i = 0 To 1000
+
+    Histogramstring = Histogramstring & CStr(histogramXaxis(i)) & Chr(9) & CStr(histogramYDiameterVolNormSmooth(i)) & vbCrLf
+
+Next
+
+f.Write Histogramstring
+
+f.Close
+
+
+
+'Calculate the CE Diameter parameters that Malvern Outputs:------------------------------------------------------------------------------------------------
+
+'First calculate D[4,3] and D[3,2]
+
+Dim TotalSEVolume
+
+TotalSEVolume = 0
+
+For j = 0 To UBound(SEVolumeVectorFil)-1
+
+    TotalSEVolume = TotalSEVolume + SEVolumeVectorFil(j)
+
+Next
+
+
+Dim D43vd, D32vd, D43, D32
+
+D43vd = 0
+D32vd = 0
+
+For k = 0 To UBound(SEVolumeVectorFil)-1
+
+    D43vd = D43vd + (SEVolumeVectorFil(k) * DiameterVectorFil(k))
+    D32vd = D32vd + (SEVolumeVectorFil(k) / DiameterVectorFil(k))
+
+Next
+
+
+D43 = D43vd / TotalSEVolume
+D32 = TotalSEVolume / D32vd
+
+
+'Initial attempt at calculating D[v,0.1], D[v,0.5], D[v,0.9]: first need To convert vol weighted histogram To cumulative
+
+Dim cumulativeYDiameterVol(1001)
+
+cumulativeYDiameterVol(0) = histogramYDiameterVolNormSmooth(0)
+
+For k = 1 To 1000
+
+    cumulativeYDiameterVol(k) = cumulativeYDiameterVol(k-1) + histogramYDiameterVolNormSmooth(k)
+
+Next
+
+'Find the bounding bins where the 10%, 50%, and 90% values are hidden
+
+Dim Dv1_xbounds(2), Dv1_ybounds(2), Dv5_xbounds(2), Dv5_ybounds(2), Dv9_xbounds(2), Dv9_ybounds(2), Dv99_xbounds(2), Dv99_ybounds(2)
+
+For i = 0 To 999
+
+   If cumulativeYDiameterVol(i) <= 10 And cumulativeYDiameterVol(i+1) >= 10 Then
+        Dv1_xbounds(0) = histogramXaxis(i)
+        Dv1_xbounds(1) = histogramXaxis(i+1)
+        Dv1_ybounds(0) = cumulativeYDiameterVol(i)
+        Dv1_ybounds(1) = cumulativeYDiameterVol(i+1)
+
+   ElseIf cumulativeYDiameterVol(i) <= 50 And cumulativeYDiameterVol(i+1) >= 50 Then
+        Dv5_xbounds(0) = histogramXaxis(i)
+        Dv5_xbounds(1) = histogramXaxis(i+1)
+        Dv5_ybounds(0) = cumulativeYDiameterVol(i)
+        Dv5_ybounds(1) = cumulativeYDiameterVol(i+1)
+
+   ElseIf cumulativeYDiameterVol(i) <= 90 And cumulativeYDiameterVol(i+1) >= 90 Then
+        Dv9_xbounds(0) = histogramXaxis(i)
+        Dv9_xbounds(1) = histogramXaxis(i+1)
+        Dv9_ybounds(0) = cumulativeYDiameterVol(i)
+        Dv9_ybounds(1) = cumulativeYDiameterVol(i+1)
+   
+   ElseIf cumulativeYDiameterVol(i) <= 99 And cumulativeYDiameterVol(i+1) >= 99 Then
+        Dv99_xbounds(0) = histogramXaxis(i)
+        Dv99_xbounds(1) = histogramXaxis(i+1)
+        Dv99_ybounds(0) = cumulativeYDiameterVol(i)
+        Dv99_ybounds(1) = cumulativeYDiameterVol(i+1)
+
+   Else
+   End If
+
+Next
+
+'Now Interpolate With Formula To calculate D[v,0.1], D[v,0.5], and D[v,0.9]
+
+Dim Z_Dv1, Dv1, Z_Dv5, Dv5, Z_Dv9, Dv9
+
+Z_Dv1 = Log(Dv1_xbounds(0))/Log(10) + (Log(Dv1_xbounds(1))/Log(10)-Log(Dv1_xbounds(0))/Log(10)) * ((10-Dv1_ybounds(0)) / (Dv1_ybounds(1)-Dv1_ybounds(0)))
+Dv1 = 10^Z_Dv1
+
+Z_Dv5 = Log(Dv5_xbounds(0))/Log(10) + (Log(Dv5_xbounds(1))/Log(10)-Log(Dv5_xbounds(0))/Log(10)) * ((50-Dv5_ybounds(0)) / (Dv5_ybounds(1)-Dv5_ybounds(0)))
+Dv5 = 10^Z_Dv5
+
+Z_Dv9 = Log(Dv9_xbounds(0))/Log(10) + (Log(Dv9_xbounds(1))/Log(10)-Log(Dv9_xbounds(0))/Log(10)) * ((90-Dv9_ybounds(0)) / (Dv9_ybounds(1)-Dv9_ybounds(0)))
+Dv9 = 10^Z_Dv9
+
+Z_Dv99 = Log(Dv99_xbounds(0))/Log(10) + (Log(Dv99_xbounds(1))/Log(10)-Log(Dv99_xbounds(0))/Log(10)) * ((99-Dv99_ybounds(0)) / (Dv99_ybounds(1)-Dv99_ybounds(0)))
+Dv99 = 10^Z_Dv99
+
+
+
+'Finally, print out the calculated parameters For the Filtered data-------------------------------------------------------------------
+
+Dim fso2, NewFileNamePath2, Parameterstring
+Set fso2 = CreateObject("Scripting.Filesystemobject")
+
+NewFileNamePath2 = Replace(FilePath, ".txt", "_CalculatedParameters.txt")
+
+Set f = fso2.CreateTextFile(NewFileNamePath2, True, True)
+
+    Parameterstring = Parameterstring & "D[4,3]" & Chr(9) & CStr(D43) & vbCrLf
+    Parameterstring = Parameterstring & "D[3,2]" & Chr(9) & CStr(D32) & vbCrLf
+    Parameterstring = Parameterstring & "D[v,0.1]" & Chr(9) & CStr(Dv1) & vbCrLf
+    Parameterstring = Parameterstring & "D[v,0.5]" & Chr(9) & CStr(Dv5) & vbCrLf
+    Parameterstring = Parameterstring & "D[v,0.9]" & Chr(9) & CStr(Dv9) & vbCrLf
+    Parameterstring = Parameterstring & "D[v,0.99]" & Chr(9) & CStr(Dv99) & vbCrLf
+
+
+f.Write Parameterstring
+
+f.Close
+
+
+
+
+
+Dim fstest
+Set fstest = CreateObject("Scripting.Filesystemobject")
+Set g = fstest.CreateTextFile("C:\Users\Nwong\Documents\Scripts\TestOutput\TestOutput1.txt", True, True)
+
+g.Write Dv9
+
+g.Close
+
+
+'LabSpec.Message(PFTable)
+
+'-------------
+
+'Dim fso ', arrayrows, arraycolumns
+
+'arrayrows = UBound(PFTable, 1)
+'arraycolumns = UBound(PFTable, 2)
+
+'Set fso = CreateObject("Scripting.Filesystemobject")
+'Set f = fso.CreateTextFile("C:\Users\Nwong\Documents\Scripts\TestOutput\TestOutput1.txt", True, True)
+
+'f.Write arrFields
+
+'f.Close
+
+'for i = 0 To arrayrows
+'   for j = 0 To arraycolumns
+
+    'f.Write PFTable(i,j)
+
+
+'-----------write debugger
+
+'Dim fso
+'Set fso = CreateObject("Scripting.Filesystemobject")
+'Set f = fso.CreateTextFile("C:\Users\Nwong\Documents\Scripts\TestOutput\TestOutput1.txt", True, True)
+
+'f.Write arrFields(3)
+
+'f.Close
+
+
