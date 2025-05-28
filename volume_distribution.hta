@@ -1,12 +1,32 @@
 <html>
   <head>
     <title>Particle Volume Distribution Analyzer</title>
-    <HTA:APPLICATION ID="ParticleApp" BORDER="thick" CAPTION="yes" SINGLEINSTANCE="yes" SCROLL="no" SYSMENU="yes" />
+    <HTA:APPLICATION
+      ID="ParticleApp"
+      BORDER="thick"
+      CAPTION="yes"
+      SINGLEINSTANCE="yes"
+      SCROLL="no"
+      SYSMENU="yes"
+    />
     <script language="VBScript">
       Option Explicit
 
+      ' Percentile helper: linear interpolation on sorted array
+      Function Percentile(arr, p)
+        Dim k, c, f
+        k = (UBound(arr)) * p
+        c = Int(k)
+        f = k - c
+        If c < UBound(arr) Then
+          Percentile = arr(c) + f * (arr(c+1) - arr(c))
+        Else
+          Percentile = arr(UBound(arr))
+        End If
+      End Function
+
       Sub RunAnalysis()
-        Dim fso, FilePath, HSCircLowerBound, HSCircUpperBound
+        Dim fso, FilePath
         Set fso = CreateObject("Scripting.FileSystemObject")
 
         ' --- get and clean file path ---
@@ -14,14 +34,10 @@
         If Left(FilePath,1) = """" Then FilePath = Mid(FilePath,2)
         If Right(FilePath,1) = """" Then FilePath = Left(FilePath, Len(FilePath)-1)
 
-        ' --- HS circularity bounds (defaults) ---
-        HSCircLowerBound = 0       ' default lower bound
-        HSCircUpperBound = 1       ' default upper bound
-        ' To enable user input, uncomment below:
-        'On Error Resume Next
-        'HSCircLowerBound = CDbl(document.getElementById("lowerbound").value)
-        'HSCircUpperBound = CDbl(document.getElementById("upperbound").value)
-        'On Error GoTo 0
+        ' --- HS circularity bounds fixed ---
+        Dim HSCircLowerBound, HSCircUpperBound
+        HSCircLowerBound = 0
+        HSCircUpperBound = 1
 
         If Not fso.FileExists(FilePath) Then
           MsgBox "Data file not found:" & vbCrLf & FilePath, vbExclamation
@@ -100,9 +116,9 @@
 
         ' --- fill histogram ---
         Dim dval, j
-        For j = 0 To UBound(fDiam)
+        For j = 0 To nFilt - 1
           dval = fDiam(j)
-          For i = 1 To bins-1
+          For i = 1 To bins - 1
             If dval > hx(i-1) And dval <= hx(i) Then
               hy(i) = hy(i) + 1
               Exit For
@@ -173,53 +189,100 @@
         outHist.Close
 
         ' --- calculate D[4,3] & D[3,2] ---
-        Dim sumSE, sum43, sum32, D43, D32
-        sumSE = 0: sum43 = 0: sum32 = 0
-        For i = 0 To UBound(fSEVol)
-          sumSE = sumSE + fSEVol(i)
-          sum43 = sum43 + fSEVol(i) * fDiam(i)
-          sum32 = sum32 + fSEVol(i) / fDiam(i)
+        Dim sumSE2, sum432, sum322, D432, D322
+        sumSE2 = 0: sum432 = 0: sum322 = 0
+        For i = 0 To nFilt - 1
+          sumSE2 = sumSE2 + fSEVol(i)
+          sum432 = sum432 + fSEVol(i) * fDiam(i)
+          sum322 = sum322 + fSEVol(i) / fDiam(i)
         Next
-        D43 = sum43 / sumSE
-        D32 = sumSE / sum32
+        D432 = sum432 / sumSE2
+        D322 = sumSE2 / sum322
 
         ' --- cumulative vol percent for interpolation ---
-        Dim cumV()
-        ReDim cumV(bins-1)
-        cumV(0) = smooth(0)
+        Dim cumV2()
+        ReDim cumV2(bins-1)
+        cumV2(0) = smooth(0)
         For i = 1 To bins-1
-          cumV(i) = cumV(i-1) + smooth(i)
+          cumV2(i) = cumV2(i-1) + smooth(i)
         Next
 
         ' --- interpolate D[v,p] at 10%,50%,90%,99% ---
-        Dim thresholds(3), labels(3), DvList(3), boundsX(1), boundsY(1), Z
+        Dim thresholds(3), labels(3), DvList(3), boundsX(1), boundsY(1), Z2
         thresholds(0)=10: thresholds(1)=50: thresholds(2)=90: thresholds(3)=99
         labels(0)="0.1": labels(1)="0.5": labels(2)="0.9": labels(3)="0.99"
         For j = 0 To 3
           For i = 0 To bins-2
-            If cumV(i) <= thresholds(j) And cumV(i+1) >= thresholds(j) Then
+            If cumV2(i) <= thresholds(j) And cumV2(i+1) >= thresholds(j) Then
               boundsX(0)=hx(i): boundsX(1)=hx(i+1)
-              boundsY(0)=cumV(i): boundsY(1)=cumV(i+1)
+              boundsY(0)=cumV2(i): boundsY(1)=cumV2(i+1)
               Exit For
             End If
           Next
-          Z = Log(boundsX(0))/Log(10) + ((Log(boundsX(1))/Log(10)-Log(boundsX(0))/Log(10)) * ((thresholds(j)-boundsY(0)) / (boundsY(1)-boundsY(0))))
-          DvList(j) = 10^Z
+          Z2 = Log(boundsX(0))/Log(10) + ((Log(boundsX(1))/Log(10)-Log(boundsX(0))/Log(10)) * ((thresholds(j)-boundsY(0))/(boundsY(1)-boundsY(0))))
+          DvList(j) = 10^Z2
         Next
 
         ' --- write parameters file ---
         Dim outPar
         Set outPar = fso.CreateTextFile(Replace(FilePath, ".txt", "_CalculatedParameters.txt"), True, True)
-        outPar.WriteLine "D[4,3]" & vbTab & D43
-        outPar.WriteLine "D[3,2]" & vbTab & D32
+        outPar.WriteLine "D[4,3]" & vbTab & D432
+        outPar.WriteLine "D[3,2]" & vbTab & D322
         For j = 0 To 3
           outPar.WriteLine "D[v," & labels(j) & "]" & vbTab & DvList(j)
         Next
         outPar.Close
 
+        ' --- write number-based cumulative distribution ---
+        Dim outNum
+        Set outNum = fso.CreateTextFile(Replace(FilePath, ".txt", "_NumberCumulative.txt"), True, True)
+        For i = 0 To bins-1
+          outNum.WriteLine hx(i) & vbTab & cumY(i)
+        Next
+        outNum.Close
+
+        ' --- summary statistics ---
+        Dim sortedDiam()
+        Dim a, b, tmp
+        Dim sumD, sumSq, meanDiam, stdDevDiam
+        Dim p10, p50, p90, p99
+        Dim outSum
+        ReDim sortedDiam(nFilt-1)
+        For i = 0 To nFilt-1: sortedDiam(i) = fDiam(i): Next
+        For a = 0 To nFilt-2
+          For b = a+1 To nFilt-1
+            If sortedDiam(a) > sortedDiam(b) Then
+              tmp = sortedDiam(a)
+              sortedDiam(a) = sortedDiam(b)
+              sortedDiam(b) = tmp
+            End If
+          Next
+        Next
+        sumD = 0: sumSq = 0
+        For i = 0 To nFilt-1: sumD = sumD + sortedDiam(i): Next
+        meanDiam = sumD / nFilt
+        For i = 0 To nFilt-1: sumSq = sumSq + (sortedDiam(i) - meanDiam)^2: Next
+        If nFilt > 1 Then stdDevDiam = Sqr(sumSq/(nFilt-1)) Else stdDevDiam = 0
+        p10 = Percentile(sortedDiam, 0.1)
+        p50 = Percentile(sortedDiam, 0.5)
+        p90 = Percentile(sortedDiam, 0.9)
+        p99 = Percentile(sortedDiam, 0.99)
+
+        Set outSum = fso.CreateTextFile(Replace(FilePath, ".txt", "_Summary.txt"), True, True)
+        outSum.WriteLine "TotalParticles" & vbTab & nFilt
+        outSum.WriteLine "MeanDiameter" & vbTab & meanDiam
+        outSum.WriteLine "StdDevDiameter" & vbTab & stdDevDiam
+        outSum.WriteLine "Diameter10thPercentile" & vbTab & p10
+        outSum.WriteLine "Diameter50thPercentile" & vbTab & p50
+        outSum.WriteLine "Diameter90thPercentile" & vbTab & p90
+        outSum.WriteLine "Diameter99thPercentile" & vbTab & p99
+        outSum.Close
+
         MsgBox "Analysis complete!" & vbCrLf & _
-               Replace(FilePath, ".txt", "_CalculatedParameters.txt") & vbCrLf & _
-               Replace(FilePath, ".txt", "_Filtered_histogram.txt"), vbInformation
+               Replace(FilePath,".txt","_CalculatedParameters.txt") & vbCrLf & _
+               Replace(FilePath,".txt","_Filtered_histogram.txt") & vbCrLf & _
+               Replace(FilePath,".txt","_NumberCumulative.txt") & vbCrLf & _
+               Replace(FilePath,".txt","_Summary.txt"), vbInformation
       End Sub
     </script>
   </head>
@@ -227,14 +290,18 @@
     <h2>Particle Volume Distribution Analyzer</h2>
     <div>
       <label for="filepath">Data File (.txt):</label><br />
-      <input id="filepath" type="text" size="60" value="TotalParticlestats1.txt" /><br /><br />
-      <!-- HS bounds inputs commented out:
-    <label for="lowerbound">HS Circularity Lower Bound:</label><br/>
-    <input id="lowerbound" type="text" value="0.00"/><br/><br/>
-    <label for="upperbound">HS Circularity Upper Bound:</label><br/>
-    <input id="upperbound" type="text" value="1.00"/><br/><br/>
-    -->
-      <button onclick="RunAnalysis()" style="font-size: 14pt; padding: 12px 24px">Generate</button>
+      <input
+        id="filepath"
+        type="text"
+        size="60"
+        value="TotalParticlestats1.txt"
+      /><br /><br />
+      <button
+        onclick="RunAnalysis()"
+        style="font-size: 16pt; padding: 12px 24px"
+      >
+        Generate
+      </button>
     </div>
   </body>
 </html>
