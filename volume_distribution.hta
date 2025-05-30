@@ -233,13 +233,24 @@
         Next
         outPar.Close
 
-        ' --- write number-based cumulative distribution ---
+
+                ' --- write number-based cumulative distribution ---
         Dim outNum
         Set outNum = fso.CreateTextFile(Replace(FilePath, ".txt", "_NumberCumulative.txt"), True, True)
         For i = 0 To bins-1
           outNum.WriteLine hx(i) & vbTab & cumY(i)
         Next
         outNum.Close
+
+        ' --- write number-based histogram (counts per bin) ---
+        Dim outNumHist
+        Set outNumHist = fso.CreateTextFile(Replace(FilePath, ".txt", "_Number_histogram.txt"), True, True)
+        For i = 0 To bins-1
+          outNumHist.WriteLine hx(i) & vbTab & hy(i)
+        Next
+        outNumHist.Close
+
+
 
         ' --- summary statistics ---
         Dim sortedDiam()
@@ -282,7 +293,9 @@
                Replace(FilePath,".txt","_CalculatedParameters.txt") & vbCrLf & _
                Replace(FilePath,".txt","_Filtered_histogram.txt") & vbCrLf & _
                Replace(FilePath,".txt","_NumberCumulative.txt") & vbCrLf & _
+               Replace(FilePath,".txt","_Number_histogram.txt") & vbCrLf & _
                Replace(FilePath,".txt","_Summary.txt"), vbInformation
+
       End Sub
     </script>
   </head>
